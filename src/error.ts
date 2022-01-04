@@ -1,7 +1,7 @@
 import { DFLAG, C_ACCESS_TOKEN_KEY } from './constant';
 export class ConnectError {
   code: ErrorCode;
-  message: string;
+  message: any;
 
   constructor(code: ErrorCode, message?: string) {
     this.code = code;
@@ -25,6 +25,7 @@ export enum ErrorCode {
   CeramicError = 'CeramicError',
   AuthProviderError = 'AuthProviderError',
   SignJwtError = 'SignJwtError',
+  IdxError = 'IdxError',
 }
 
 const errors: { [key in ErrorCode]: string } = {
@@ -36,4 +37,5 @@ const errors: { [key in ErrorCode]: string } = {
   CeramicError: '',
   AuthProviderError: '',
   SignJwtError: '',
+  IdxError: '',
 };

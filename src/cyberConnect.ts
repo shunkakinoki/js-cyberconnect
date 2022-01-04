@@ -468,6 +468,26 @@ class CyberConnect {
       this.ceramicSetAlias(targetAddr, alias);
     }
   }
+
+  async getStreamId() {
+    await this.authenticate();
+
+    if (!this.idxInstance || !this.did) {
+      return;
+    }
+
+    const table = await this.idxInstance.getIndex(this.did.id);
+
+    console.log('table is', table);
+
+    if (table) {
+      const value = table[SocialConnectSchemaId];
+
+      return value.split('ceramic://')[1];
+    } else {
+      throw new ConnectError(ErrorCode.IdxError, 'Table is empty');
+    }
+  }
 }
 
 export default CyberConnect;

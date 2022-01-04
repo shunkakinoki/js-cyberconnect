@@ -50,5 +50,6 @@ export enum Env {
 export interface Endpoint {
   ceramicUrl: string;
   cyberConnectSchema: string;
+  cyberConnectSocialSchema: string;
   cyberConnectApi: string;
 }
