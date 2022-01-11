@@ -9,14 +9,29 @@ import { fromString } from 'uint8arrays';
 import { DID } from 'dids';
 import { IDX } from '@ceramicstudio/idx';
 import { endpoints } from './network';
-import { follow, unfollow, setAlias } from './queries';
+import { follow, unfollow, setAlias, allFollowings } from './queries';
 import { ConnectError, ErrorCode } from './error';
-import { Endpoint, Blockchain, CyberConnectStore, Config } from './types';
+import {
+  Endpoint,
+  Blockchain,
+  CyberConnectStore,
+  Config,
+  BackendConnect,
+  Connection,
+} from './types';
 import { getAddressByProvider } from './utils';
 import { Caip10Link } from '@ceramicnetwork/stream-caip10-link';
 import { Env } from '.';
 import { cAuth } from './cAuth';
-import { DFLAG, C_ACCESS_TOKEN_KEY } from './constant';
+import {
+  DFLAG,
+  C_ACCESS_TOKEN_KEY,
+  MODEL,
+  definitionID,
+  MIGRATING,
+} from './constant';
+import { DIDDataStore } from '@glazed/did-datastore';
+
 class CyberConnect {
   address: string = '';
   namespace: string;
@@ -34,6 +49,7 @@ class CyberConnect {
   did: DID | null = null;
   threeId: ThreeIdProvider | null = null;
   threeIdProvider: any = null;
+  dataStore: DIDDataStore | null = null;
 
   constructor(config: Config) {
     const { provider, namespace, env, chainRef, chain } = config;
@@ -55,7 +71,10 @@ class CyberConnect {
       ...threeIdResolver,
       ...keyDidResolver,
     };
-    delete window.localStorage[C_ACCESS_TOKEN_KEY];
+
+    if (window && window.localStorage) {
+      delete window.localStorage[C_ACCESS_TOKEN_KEY];
+    }
   }
 
   async getAuthProvider() {
@@ -102,7 +121,7 @@ class CyberConnect {
     }
   }
 
-  private async setupAuthProvider() {
+  async setupAuthProvider() {
     if (this.signature) {
       return;
     }
@@ -249,17 +268,30 @@ class CyberConnect {
     }
   }
 
-  async getOutboundLink() {
-    if (!this.idxInstance) {
-      throw new ConnectError(
-        ErrorCode.CeramicError,
-        'Could not find idx instance',
-      );
+  createDataStore() {
+    if (this.dataStore) {
+      return;
     }
 
+    this.dataStore = new DIDDataStore({
+      ceramic: this.ceramicClient,
+      model: MODEL,
+    });
+  }
+
+  async getOutboundLink() {
     try {
-      const result = (await this.idxInstance.get(
-        'cyberConnect',
+      this.createDataStore();
+
+      if (!this.dataStore) {
+        throw new ConnectError(
+          ErrorCode.CeramicError,
+          'Could not find data store',
+        );
+      }
+
+      const result = (await this.dataStore.get(
+        definitionID,
       )) as CyberConnectStore;
 
       return result?.outboundLink || [];
@@ -267,7 +299,7 @@ class CyberConnect {
       throw new ConnectError(ErrorCode.CeramicError, e as string);
     }
   }
-  // first step
+
   async authenticate() {
     if (!this.address) {
       try {
@@ -282,6 +314,7 @@ class CyberConnect {
       } else {
         await this.setupAuthProvider();
         await this.setupDid();
+        this.createDataStore();
         await this.createAccountLink();
         this.createIdx();
       }
@@ -292,34 +325,62 @@ class CyberConnect {
 
   private async ceramicConnect(targetAddr: string, alias: string = '') {
     try {
-      const outboundLink = await this.getOutboundLink();
-
-      if (!this.idxInstance) {
+      if (!this.dataStore) {
         throw new ConnectError(
           ErrorCode.CeramicError,
-          'Could not find idx instance',
+          'Could not find data store',
         );
       }
 
-      const index = outboundLink.findIndex((link) => {
-        return link.target === targetAddr && link.namespace === this.namespace;
-      });
-
-      const curTimeStr = String(Date.now());
-
-      if (index === -1) {
-        outboundLink.push({
-          target: targetAddr,
-          connectionType: 'follow',
+      if (MIGRATING) {
+        const allFollowingsResp = await allFollowings({
+          address: this.address,
           namespace: this.namespace,
-          alias,
-          createdAt: curTimeStr,
+          url: this.endpoint.cyberConnectApi,
         });
-      } else {
-        outboundLink[index].createdAt = curTimeStr;
-      }
 
-      this.idxInstance.set('cyberConnect', { outboundLink });
+        const followings = (allFollowingsResp?.data?.allFollowings || []).map(
+          (connect: BackendConnect): Connection => {
+            return {
+              target: connect.address,
+              connectionType: 'follow',
+              namespace: connect.namespace,
+              alias: connect.alias,
+              createdAt: connect.lastModifiedTime.substring(0, 10),
+            };
+          },
+        );
+
+        this.dataStore.set(definitionID, { outboundLink: followings });
+      } else {
+        const outboundLink = await this.getOutboundLink();
+
+        const index = outboundLink.findIndex((link) => {
+          return (
+            link.target === targetAddr && link.namespace === this.namespace
+          );
+        });
+
+        const curDate = new Date();
+        const curMonth = curDate.getUTCMonth() + 1;
+        const createdAt = `${curDate.getUTCFullYear()}-${
+          curMonth >= 10 ? curMonth : `0${curMonth}`
+        }-${curDate.getUTCDate()}`;
+
+        if (index === -1) {
+          outboundLink.push({
+            target: targetAddr,
+            connectionType: 'follow',
+            namespace: this.namespace,
+            alias,
+            createdAt,
+          });
+        } else {
+          outboundLink[index].createdAt = createdAt;
+        }
+
+        this.dataStore.set(definitionID, { outboundLink });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -327,22 +388,20 @@ class CyberConnect {
 
   private async ceramicDisconnect(targetAddr: string) {
     try {
-      const outboundLink = await this.getOutboundLink();
-
-      if (!this.idxInstance) {
+      if (!this.dataStore) {
         throw new ConnectError(
           ErrorCode.CeramicError,
-          'Could not find idx instance',
+          'Could not find data store',
         );
       }
+
+      const outboundLink = await this.getOutboundLink();
 
       const newOutboundLink = outboundLink.filter((link) => {
         return link.target !== targetAddr || link.namespace !== this.namespace;
       });
 
-      this.idxInstance.set('cyberConnect', {
-        outboundLink: newOutboundLink,
-      });
+      this.dataStore.set(definitionID, { outboundLink: newOutboundLink });
     } catch (e) {
       console.error(e);
     }
@@ -350,14 +409,14 @@ class CyberConnect {
 
   private async ceramicSetAlias(targetAddr: string, alias: string) {
     try {
-      const outboundLink = await this.getOutboundLink();
-
-      if (!this.idxInstance) {
+      if (!this.dataStore) {
         throw new ConnectError(
           ErrorCode.CeramicError,
-          'Could not find idx instance',
+          'Could not find data store',
         );
       }
+
+      const outboundLink = await this.getOutboundLink();
 
       const index = outboundLink.findIndex((link) => {
         return link.target === targetAddr && link.namespace === this.namespace;
@@ -365,7 +424,7 @@ class CyberConnect {
 
       if (index !== -1) {
         outboundLink[index] = { ...outboundLink[index], alias };
-        this.idxInstance.set('cyberConnect', { outboundLink });
+        this.dataStore.set(definitionID, { outboundLink });
       } else {
         throw new ConnectError(
           ErrorCode.CeramicError,
@@ -466,26 +525,6 @@ class CyberConnect {
     }
     if (DFLAG) {
       this.ceramicSetAlias(targetAddr, alias);
-    }
-  }
-
-  async getStreamId() {
-    await this.authenticate();
-
-    if (!this.idxInstance || !this.did) {
-      return;
-    }
-
-    const table = await this.idxInstance.getIndex(this.did.id);
-
-    console.log('table is', table);
-
-    if (table) {
-      const value = table[SocialConnectSchemaId];
-
-      return value.split('ceramic://')[1];
-    } else {
-      throw new ConnectError(ErrorCode.IdxError, 'Table is empty');
     }
   }
 }

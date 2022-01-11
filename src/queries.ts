@@ -77,11 +77,34 @@ export const setAliasQuerySchema = ({
   };
 };
 
+export const allFollowingsSchema = ({
+  address,
+  namespace,
+}: {
+  address: string;
+  namespace?: string;
+}) => {
+  return {
+    operationName: 'allFollowings',
+    query: `query allFollowings($address: String!, $namespace: String) {
+      allFollowings(address: $address, namespace: $namespace) {
+        address
+        ens
+        alias
+        namespace
+        lastModifiedTime
+      }
+    }`,
+    variables: { address, namespace },
+  };
+};
+
 export const querySchemas = {
   connect: connectQuerySchema,
   disconnect: disconnectQuerySchema,
   auth: authSchema,
   setAlias: setAliasQuerySchema,
+  allFollowings: allFollowingsSchema,
 };
 
 export const request = async (url = '', data = {}) => {
@@ -195,6 +218,22 @@ export const setAlias = ({
     alias,
     namespace,
     signature,
+  });
+  return handleQuery(schema, url);
+};
+
+export const allFollowings = ({
+  address,
+  namespace,
+  url,
+}: {
+  address: string;
+  namespace: string;
+  url: string;
+}) => {
+  const schema = querySchemas['allFollowings']({
+    address,
+    namespace,
   });
   return handleQuery(schema, url);
 };
