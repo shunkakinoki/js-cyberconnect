@@ -167,7 +167,7 @@ import CyberConnect, {
   Env,
   Blockchain,
   Solana,
-} from 'npm install @cyberlab/cyberconnect';
+} from '@cyberlab/cyberconnect';
 
 const cyberConnect = new CyberConnect({
   namespace: 'CyberConnect',
